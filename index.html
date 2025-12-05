@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>颜值分析报告 - Dewater</title>
+    <!-- 引入 Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 使用 Inter 字体，并确保页面居中和响应式 */
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .container { max-width: 90%; }
+        /* 隐藏文件上传的原生样式 */
+        .custom-file-upload {
+            border: 2px dashed #9ca3af;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .custom-file-upload:hover {
+            border-color: #3b82f6;
+            background-color: #e0f2fe;
+        }
+        #preview-image {
+            display: none;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+    <div class="container bg-white shadow-2xl rounded-xl p-8 md:p-12 w-full max-w-lg">
+        <h1 class="text-3xl font-extrabold text-gray-900 text-center mb-2">AI 颜值分析</h1>
+        <p class="text-center text-gray-500 mb-8">上传您的照片，获取个性化颜值报告预览</p>
+
+        <!-- 上传区域 -->
+        <div id="upload-area" class="custom-file-upload flex flex-col items-center justify-center p-6 rounded-lg h-64 mb-6">
+            <input type="file" id="photo-input" accept="image/*" class="hidden">
+            <label for="photo-input" class="text-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-gray-400 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                <span class="text-lg font-medium text-gray-600">点击上传照片</span>
+                <p class="text-sm text-gray-400">支持 JPG, PNG 格式，最大 5MB</p>
+            </label>
+            <img id="preview-image" alt="照片预览" class="rounded-lg absolute inset-0">
+        </div>
+
+        <!-- 状态和按钮区域 -->
+        <div id="status-message" class="text-center text-sm text-red-500 mb-4 h-5"></div>
+
+        <button id="analyze-button" 
+                class="w-full py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-300 disabled:opacity-50"
+                disabled>
+            开始分析
+        </button>
+
+        <!-- 报告预览区域 (初始隐藏) -->
+        <div id="report-preview" class="hidden mt-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">分析报告预览</h2>
+            <div id="preview-content" class="text-gray-600 mb-4">
+                <!-- 预览内容将由 JS 插入 -->
+            </div>
+            
+            <p class="text-sm text-yellow-600 mb-4">完整报告包含更详细的五官分析和优化建议。</p>
+            
+            <button id="pay-button" 
+                    class="w-full py-3 bg-green-500 text-white font-semibold rounded-lg shadow-md hover:bg-green-600 transition duration-300">
+                微信支付 ￥9.9 查看完整报告
+            </button>
+        </div>
+
+        <!-- 微信支付弹窗 (简化模拟) -->
+        <div id="payment-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 hidden items-center justify-center p-4">
+            <div class="bg-white rounded-xl p-6 w-full max-w-sm text-center">
+                <h3 class="text-2xl font-bold mb-4">正在调起微信支付...</h3>
+                <p class="text-gray-600 mb-6">请在弹出的支付窗口完成付款。</p>
+                <div class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-12 w-12 mb-4 mx-auto"></div>
+                <button id="close-modal-button" class="mt-4 text-sm text-gray-500 hover:text-gray-700">关闭</button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- 配置变量 (重要：替换为您的实际 Worker URL) ---
+        const WORKER_API_URL = 'https://your-dewater-worker.workers.dev/'; // **请替换为您部署的 Cloudflare Worker URL**
+
+        // --- DOM 元素引用 ---
+        const photoInput = document.getElementById('photo-input');
+        const previewImage = document.getElementById('preview-image');
+        const analyzeButton = document.getElementById('analyze-button');
+        const statusMessage = document.getElementById('status-message');
+        const reportPreview = document.getElementById('report-preview');
+        const previewContent = document.getElementById('preview-content');
+        const payButton = document.getElementById('pay-button');
+        const paymentModal = document.getElementById('payment-modal');
+        const closeModalButton = document.getElementById('close-modal-button');
+        
+        let uploadedImageBase64 = null; // 存储 Base64 格式的图片数据
+        let currentReportId = null; // 存储当前分析报告的 ID
+
+        // --- 事件监听器 ---
+
+        // 1. 文件选择和预览
+        photoInput.addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                // 检查文件大小 (最大 5MB)
+                if (file.size > 5 * 1024 * 1024) {
+                    statusMessage.textContent = '文件过大，请上传小于 5MB 的图片。';
+                    analyzeButton.disabled = true;
+                    return;
+                }
+                
+                statusMessage.textContent = ''; // 清除状态信息
+                reportPreview.classList.add('hidden'); // 隐藏报告区
+                
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    // 预览图片
+                    previewImage.src = e.target.result;
+                    previewImage.style.display = 'block';
+                    
+                    // 将图片转为 Base64 字符串，方便传输给 Worker
+                    // 注意：这里简单地存储 Base64，生产环境应先上传到对象存储 COS/OSS
+                    uploadedImageBase64 = e.target.result.split(',')[1]; 
+                    
+                    analyzeButton.disabled = false;
+                };
+                reader.readAsDataURL(file);
+            } else {
+                previewImage.style.display = 'none';
+                analyzeButton.disabled = true;
+                uploadedImageBase64 = null;
+            }
+        });
+
+        // 2. 开始分析按钮
+        analyzeButton.addEventListener('click', async function() {
+            if (!uploadedImageBase64) {
+                statusMessage.textContent = '请先上传照片。';
+                return;
+            }
+            
+            analyzeButton.disabled = true;
+            analyzeButton.textContent = '正在分析中... (约 10 秒)';
+            statusMessage.textContent = '正在将照片发送给火山方舟模型...';
+
+            try {
+                // 调用后端 Worker API 进行分析
+                const response = await fetch(WORKER_API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        action: 'analyze',
+                        // 注意：这里是直接发送 Base64 数据，如果图片很大，
+                        // 可能会导致 Worker 超时或内存限制。生产环境应先上传到对象存储。
+                        image_data_base64: uploadedImageBase64 
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.report_id) {
+                    currentReportId = data.report_id;
+                    
+                    // 更新预览内容
+                    previewContent.innerHTML = data.preview_html || '<p>得分：85 分 (基础评估)</p><p>特点：五官协调，面部轮廓清晰。</p>';
+                    reportPreview.classList.remove('hidden');
+                    statusMessage.textContent = '分析成功！请查看预览。';
+                } else {
+                    statusMessage.textContent = '分析失败：' + (data.message || 'Worker 返回错误。');
+                }
+
+            } catch (error) {
+                console.error('分析请求失败:', error);
+                statusMessage.textContent = '网络请求失败，请检查 Worker URL 或网络连接。';
+            } finally {
+                analyzeButton.disabled = false;
+                analyzeButton.textContent = '重新分析';
+            }
+        });
+
+        // 3. 支付按钮 (触发微信支付流程)
+        payButton.addEventListener('click', async function() {
+            if (!currentReportId) {
+                statusMessage.textContent = '请先完成分析获取报告ID。';
+                return;
+            }
+            
+            // 显示支付弹窗
+            paymentModal.classList.remove('hidden');
+            paymentModal.classList.add('flex');
+            
+            // --- 实际微信支付流程 (Worker 端) ---
+            try {
+                // 1. 请求 Worker 生成微信预支付订单
+                const response = await fetch(WORKER_API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'request_payment',
+                        report_id: currentReportId,
+                        amount: 9.90, // 支付金额
+                        // 其他信息如用户 openid 等...
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (response.ok && data.wechat_pay_params) {
+                    // 2. 使用 Worker 返回的参数，调起微信支付 JSSDK (需要 ICP 备案和配置)
+                    // WeixinJSBridge.invoke('getBrandWCPayRequest', data.wechat_pay_params, function(res) { ... });
+                    
+                    statusMessage.textContent = '已获取支付参数，请在微信中完成。';
+                    // 简化模拟：假设支付成功后，H5 会轮询 Worker 检查支付状态
+                    setTimeout(() => {
+                        // 模拟支付成功并跳转到完整报告页
+                        paymentModal.classList.add('hidden');
+                        alert('支付成功！现在跳转到完整报告...');
+                        // 生产环境中应重定向到 /report?id=currentReportId
+                    }, 5000); 
+
+                } else {
+                    alert('获取支付订单失败: ' + (data.message || 'Worker 返回错误。'));
+                    paymentModal.classList.add('hidden');
+                }
+
+            } catch (error) {
+                console.error('支付请求失败:', error);
+                alert('网络错误，无法调起支付。');
+                paymentModal.classList.add('hidden');
+            }
+        });
+        
+        // 4. 关闭支付弹窗
+        closeModalButton.addEventListener('click', () => {
+             paymentModal.classList.remove('flex');
+             paymentModal.classList.add('hidden');
+        });
+
+    </script>
+</body>
+</html>
